@@ -243,6 +243,7 @@ public:
                 fileID = strtok(NULL, " ");
                 send(client_fd, container.data[fileID].c_str(), strlen(container.data[fileID].c_str()), 0);
                 container.data.erase(fileID);
+                container.space_left++;
                 close(server_fd);
                 return;
             }
