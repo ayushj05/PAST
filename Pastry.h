@@ -1,3 +1,6 @@
+#ifndef PASTRY_H
+#define PASTRY_H
+
 #include <iostream>
 #include <ifaddrs.h>
 #include <stdio.h>
@@ -592,3 +595,5 @@ string getPublicIP(){
     }
     return ret;
 }
+
+#endif /* PASTRY_H */
