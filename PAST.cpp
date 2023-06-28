@@ -1,20 +1,5 @@
-#include <iostream>
-#include <ifaddrs.h>
-#include <stdio.h>
-#include <netdb.h>
-#include <stdlib.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <set>
-#include <map>
-#include <string.h>
-#include <algorithm>
-#include <thread>
 #include "Pastry.h"
-#include "SHA1.h"
+#include <thread>
 
 int main(){
     PastryNode node;
