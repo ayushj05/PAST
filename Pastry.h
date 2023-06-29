@@ -212,12 +212,19 @@ public:
             set_LSet(buffer);
         }
         // store <fileID> <owner's ip> <owner's port>
+        // store direct <fileID> <content>
         else if(strcmp(request_type, "store") == 0){
             close(server_fd);
             
             string fileID = strtok(NULL, " ");
             
-            if(route(buffer, fileID))
+            if(fileID == "direct"){
+                fileID = strtok(NULL, " ");
+                string content = strtok(NULL, "");
+                container.data[fileID] = content;
+                return;
+            }
+            else if(route(buffer, fileID))
                 return;
             // if not routed, then you are the closest node to fileID
             
@@ -234,6 +241,11 @@ public:
             container.data[fileID] = buffer;
             
             close(client);
+            
+            // ask the nodes in your Leaf Set also to store the file
+            string message = "store direct " + fileID + " " + buffer;
+            for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
+                route(message.c_str(), fileID, (*it).ip, (*it).port);
         }
         // get (direct) <fileID> <client's ip> <client's port>
         else if(strcmp(request_type, "get") == 0){
