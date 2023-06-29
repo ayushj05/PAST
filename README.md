@@ -1,6 +1,6 @@
 # A simple implementation of PAST: P2P storage utility
 PAST is a large-scale, distributed, persistent storage system based on the Pastry peer-to-peer overlay network.\
-Following research papers were refered to while building this project:\
+Following research papers were referred to while building this project:\
 PAST: https://www.cs.cornell.edu/people/egs/615/past.pdf \
 Pastry: http://rowstron.azurewebsites.net/PAST/pastry.pdf
 
