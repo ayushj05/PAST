@@ -581,7 +581,7 @@ int compare_distance(string A, string B, string C){
 
 
 /*
-Returns public IP of wireless interface
+Returns IP address of wireless interface
 */
 string getPublicIP(){
     struct ifaddrs* ifAddrStruct = NULL;
@@ -594,8 +594,7 @@ string getPublicIP(){
     for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next){
         if (!ifa->ifa_addr)
             continue;
-        if (ifa->ifa_addr->sa_family == AF_INET){ 
-            // IPv4
+        if (ifa->ifa_addr->sa_family == AF_INET){
             tmpAddrPtr=&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
             char addressBuffer[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
