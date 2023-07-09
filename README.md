@@ -22,7 +22,7 @@ Linux
 g++ PAST.cpp -lpthread -o PAST
 ```
 
-## For running the application:
+## To run the application:
 ```bash
 ./PAST
 ```
