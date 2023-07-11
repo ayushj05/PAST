@@ -152,9 +152,7 @@ public:
                 perror("accept() failed (node_server)");
                 exit(EXIT_FAILURE);
             }
-            
-            // cout << "    Connected to: " << inet_ntoa(address.sin_addr) << " " << ntohs(address.sin_port) << "\n" << endl;
-            
+                        
             int length;
             if((length = recv(new_socket, buffer, BUFFER_SIZE, 0)) < 0){
                 perror("recv() failed (node_server)");
@@ -178,7 +176,6 @@ public:
         char buffer_tmp[strlen(buffer)];
         strcpy(buffer_tmp, buffer);
         char* request_type = strtok(buffer_tmp, " ");
-        // cout << request_type << endl;
         
         // NEW <row_index> <nodeID> <ip> <port>
         if(strcmp(request_type, "NEW") == 0){
@@ -226,7 +223,6 @@ public:
         // LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>
         else if(strcmp(request_type, "LSet") == 0){
             close(client_fd);
-            cout << buffer << "\n" << endl;
             set_LSet(buffer);
         }
         // store <fileID> <owner's ip> <owner's port>
@@ -398,7 +394,6 @@ public:
         // connecting and sending data to that node
         int client_fd = connectTo(ip, port);
         if(client_fd == -1) return false;
-        // cout << "Connected to: " << ip << ", " << port << "\n" << endl;
         send(client_fd, buffer, strlen(buffer), 0);
         
         close(client_fd);
@@ -612,7 +607,6 @@ public:
 
     // RT <row_index> <row_index^th row for RT>
     void set_RTable(char* buffer){
-        cout << buffer << endl;
         char* token = strtok(buffer, " ");  // token = "RT"
         
         int row_index = atoi(strtok(NULL, " "));
@@ -629,7 +623,6 @@ public:
             token = strtok(NULL, " ");
             // 'i' shouldn't be equal to row_index^th digit
             if(i != info.nodeID[row_index] - '0' && token_nodeID.substr(0, row_index) == info.nodeID.substr(0, row_index)){
-                // cout << i << " != info.nodeID[" << row_index << "] = " << info.nodeID << '[' << row_index << "] = " << info.nodeID[row_index] << endl;
                 RTable_mtx.lock();
                 RTable[row_index][i] = entry(token_nodeID, token_ip, token_port);
                 RTable_mtx.unlock();
