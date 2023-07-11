@@ -13,9 +13,12 @@
 #include <unistd.h>
 #include <set>
 #include <map>
+#include <vector>
 #include <string.h>
 #include <algorithm>
 #include <thread>
+#include <chrono>
+#include <mutex>
 #include "SHA1.h"
 using namespace std;
 
@@ -27,7 +30,7 @@ using namespace std;
 #define left first
 #define right second
 
-
+mutex LSet_mtx, RTable_mtx;
 
 struct entry{
     string nodeID;
@@ -63,7 +66,6 @@ class PastryNode{
     entry info;
     storage container;
     pair<set<entry>, set<entry>> LSet;
-    set<entry> NSet;
     entry RTable[RT_ROW][4];
     // N = 100, b = 2
 public:
@@ -92,7 +94,16 @@ public:
         server.sin_port = htons(stoi(port));
         client.sin_port = htons(stoi(info.port));
         
-        while(connect(client_fd, (struct sockaddr *)&server, sizeof(server)) < 0){}
+        auto started = chrono::high_resolution_clock::now();
+        chrono::duration<double> elapsed;
+        while(connect(client_fd, (struct sockaddr *)&server, sizeof(server)) < 0){
+            auto finished = chrono::high_resolution_clock::now();
+            elapsed = finished - started;
+            if(elapsed.count() > 1){
+                // close(client_fd);
+                return -1;
+            }
+        }
 
         return client_fd;
     }
@@ -100,42 +111,42 @@ public:
 
 
     void node_server(){
-        while(true){
-            int server_fd;
-            struct sockaddr_in address;
-            socklen_t addr_len = sizeof(address);
-            char buffer[BUFFER_SIZE];
+        int server_fd;
+        struct sockaddr_in address;
+        socklen_t addr_len = sizeof(address);
+        char buffer[BUFFER_SIZE];
 
-            char serverIP_array[info.ip.size()+1];
-            strcpy(serverIP_array, info.ip.c_str());
+        char serverIP_array[info.ip.size()+1];
+        strcpy(serverIP_array, info.ip.c_str());
 
-            // Creating socket file descriptor
-            if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
-                perror("socket() failed (node_server)");
-                exit(EXIT_FAILURE);
-            }
-            
-            memset(&address, 0, sizeof(address));
-            
-            int opt = 1;
-            if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))){
-                perror("setsockopt() failed (node_server)");
-                exit(EXIT_FAILURE);
-            }
-            address.sin_family = AF_INET;
-            address.sin_addr.s_addr = inet_addr(serverIP_array);
-            address.sin_port = htons(stoi(info.port));
-            
-            if(bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
-                perror("bind() failed (node_server)");
-                exit(EXIT_FAILURE);
-            }
+        // Creating socket file descriptor
+        if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0){
+            perror("socket() failed (node_server)");
+            exit(EXIT_FAILURE);
+        }
         
-            if(listen(server_fd, 100) < 0){
-                perror("listen() failed (node_server)");
-                exit(EXIT_FAILURE);
-            }
-            
+        memset(&address, 0, sizeof(address));
+        
+        int opt = 1;
+        if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))){
+            perror("setsockopt() failed (node_server)");
+            exit(EXIT_FAILURE);
+        }
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = inet_addr(serverIP_array);
+        address.sin_port = htons(stoi(info.port));
+        
+        if(bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
+            perror("bind() failed (node_server)");
+            exit(EXIT_FAILURE);
+        }
+    
+        if(listen(server_fd, 100) < 0){
+            perror("listen() failed (node_server)");
+            exit(EXIT_FAILURE);
+        }
+        
+        while(true){
             int new_socket;
             if((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addr_len)) < 0){
                 perror("accept() failed (node_server)");
@@ -152,19 +163,26 @@ public:
             buffer[length] = '\0';
             
             handleRequest(server_fd, new_socket, buffer);
+            
+            close(new_socket);
         }
+        close(server_fd);
     }
 
 
-
+    
+    /*
+    Handles request received by the server.
+    */
     void handleRequest(int server_fd, int client_fd, char* buffer){
         char buffer_tmp[strlen(buffer)];
         strcpy(buffer_tmp, buffer);
         char* request_type = strtok(buffer_tmp, " ");
+        // cout << request_type << endl;
         
         // NEW <row_index> <nodeID> <ip> <port>
         if(strcmp(request_type, "NEW") == 0){
-            close(server_fd);
+            close(client_fd);
             
             int row_index = atoi(strtok(NULL, " "));
             
@@ -186,35 +204,35 @@ public:
             // if not routed, implies, reached node with closest nodeID
             // send Leaf Set to new node
             if(!routed){
-                response = "LSet " + info.nodeID + " " + info.ip + " " + info.port;
-                for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
-                    response.append(" " + (*it).nodeID + " " + (*it).ip + " " + (*it).port);
-                for(auto it = LSet.right.begin(); it != LSet.right.end(); it++)
-                    response.append(" " + (*it).nodeID + " " + (*it).ip + " " + (*it).port);
+                response = get_LSet();
                 route(response.c_str(), nodeID, ip, port);
             }
             
             // update your own RTable by filling the appropriate empty entry with new node
-            if(RTable[l][nodeID[l] - '0'].ip == "_")
-                RTable[l][nodeID[l] - '0'] = {nodeID, ip, port};
+            if(RTable[l][nodeID[l] - '0'].ip == "_"){
+                RTable_mtx.lock();
+                RTable[l][nodeID[l] - '0'] = entry(nodeID, ip, port);
+                RTable_mtx.unlock();
+            }
             
             // update your own Leaf Set
             insert_LSet(nodeID, ip, port);
         }
-        // RT <row_index> <row_index^th row for RT>" + " done"(if node with closest nodeID)
+        // RT <row_index> <row_index^th row for RT>
         else if(strcmp(request_type, "RT") == 0){
-            close(server_fd);
+            close(client_fd);
             set_RTable(buffer);
         }
         // LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>
         else if(strcmp(request_type, "LSet") == 0){
-            close(server_fd);
+            close(client_fd);
+            cout << buffer << "\n" << endl;
             set_LSet(buffer);
         }
         // store <fileID> <owner's ip> <owner's port>
         // store direct <fileID> <content>
         else if(strcmp(request_type, "store") == 0){
-            close(server_fd);
+            close(client_fd);
             
             string fileID = strtok(NULL, " ");
             
@@ -233,6 +251,7 @@ public:
             string response = "get direct " + fileID;
             
             int client = connectTo(ip, port);
+            if(client == -1)    return;
             send(client, response.c_str(), strlen(response.c_str()), 0);
             
             // receive file data and save in container
@@ -256,10 +275,10 @@ public:
                 send(client_fd, container.data[fileID].c_str(), strlen(container.data[fileID].c_str()), 0);
                 container.data.erase(fileID);
                 container.space_left++;
-                close(server_fd);
+                close(client_fd);
                 return;
             }
-            close(server_fd);
+            close(client_fd);
             
             if(route(buffer, fileID))
                 return;
@@ -270,13 +289,14 @@ public:
             string response = "save " + fileID + " " + container.data[fileID];
             
             int client = connectTo(ip, port);
+            if(client == -1)    return;
             send(client, response.c_str(), strlen(response.c_str()), 0);
             
             close(client);
         }
         // save <fileID> <data>
         else if(strcmp(request_type, "save") == 0){
-            close(server_fd);
+            close(client_fd);
             
             string fileID = strtok(NULL, " ");
             char* data = strtok(NULL, "");
@@ -285,6 +305,28 @@ public:
                 cout << "    <error: file not found on server>\n" << endl;
             else
                 container.data[fileID] = data;
+        }
+        else if(strcmp(request_type, "check") == 0)
+            close(client_fd);
+        else if(strcmp(request_type, "give_LSet") == 0){
+            string response = get_LSet();
+            
+            send(client_fd, response.c_str(), strlen(response.c_str()), 0);
+            
+            close(client_fd);
+        }
+        else if(strcmp(request_type, "give_RT") == 0){
+            int i = atoi(strtok(NULL, " ")), j = atoi(strtok(NULL, " "));
+            
+            string response;
+            if(RTable[i][j].nodeID == "_")
+                response = "Empty";
+            else
+                response = "RT_entry " + RTable[i][j].nodeID + " " + RTable[i][j].ip + " " + RTable[i][j].port;
+            
+            send(client_fd, response.c_str(), strlen(response.c_str()), 0);
+            
+            close(client_fd);
         }
     }
 
@@ -333,17 +375,6 @@ public:
                     }
                     
                     if(!found){
-                        for(entry x : NSet){
-                            if(compare_distance(x.nodeID, info.nodeID, nodeID) == 1){
-                                ip = x.ip;
-                                port = x.port;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if(!found){
                         for(auto &x : RTable){
                             for(auto y : x){
                                 if(compare_distance(y.nodeID, info.nodeID, nodeID) == 1){
@@ -366,11 +397,166 @@ public:
         
         // connecting and sending data to that node
         int client_fd = connectTo(ip, port);
+        if(client_fd == -1) return false;
+        // cout << "Connected to: " << ip << ", " << port << "\n" << endl;
         send(client_fd, buffer, strlen(buffer), 0);
         
         close(client_fd);
         
         return true;
+    }
+    
+    
+    
+    /*
+    Checks whether the peers stored in its state tables are live or not.
+    Removes the nodes that have departed from the network.
+    */
+    void check_peers(){
+        while(true){
+            vector<string> failed_nodes;
+            
+            // Remove the failed nodes from left Leaf Set and store them in failed_nodes.
+            for(auto it = LSet.left.begin(); it != LSet.left.end();){
+                int client = connectTo((*it).ip, (*it).port);
+                if(client == -1){
+                    failed_nodes.push_back((*it).nodeID);
+                    it = LSet.left.erase(it);
+                    
+                    continue;
+                }
+                string message = "check";
+                send(client, message.c_str(), strlen(message.c_str()), 0);
+                
+                close(client);
+                it++;
+            }
+            
+            // Request Leaf Set from leftmost node in own's Leaf Set to update own's Leaf Set.
+            // Remove the nodes which were found to have failed in previous step, as they might
+            // not have been checked by the leftmost node.
+            if(!LSet.left.empty()){
+                entry leftmost = *(LSet.left.begin());
+                int client = connectTo(leftmost.ip, leftmost.port);
+                if(client != -1){
+                    string message = "give_LSet";
+                    send(client, message.c_str(), strlen(message.c_str()), 0);
+                    char buffer[BUFFER_SIZE];
+                    
+                    int length = recv(client, buffer, BUFFER_SIZE, 0);
+                    buffer[length] = '\0';
+                    
+                    close(client);
+                    
+                    set_LSet(buffer);
+                    
+                    for(string nodeID : failed_nodes)
+                        LSet.left.erase(nodeID);
+                }
+            }
+            
+            failed_nodes.clear();
+            
+            // Remove the failed nodes from right Leaf Set and store them in failed_nodes.
+            for(auto it = LSet.right.begin(); it != LSet.right.end();){
+                int client = connectTo((*it).ip, (*it).port);
+                if(client == -1){
+                    failed_nodes.push_back((*it).nodeID);
+                    it = LSet.right.erase(it);
+                    
+                    continue;
+                }
+                string message = "check";
+                send(client, message.c_str(), strlen(message.c_str()), 0);
+                
+                close(client);
+                it++;
+            }
+            
+            // Request Leaf Set from rightmost node in own's Leaf Set to update own's Leaf Set.
+            // Remove the nodes which were found to have failed in previous step, as they might
+            // not have been checked by the rightmost node.
+            if(!LSet.right.empty()){
+                entry rightmost = *--LSet.right.end();
+                int client = connectTo(rightmost.ip, rightmost.port);
+                if(client != -1){
+                    string message = "give_LSet";
+                    send(client, message.c_str(), strlen(message.c_str()), 0);
+                    char buffer[BUFFER_SIZE];
+                    
+                    int length = recv(client, buffer, BUFFER_SIZE, 0);
+                    buffer[length] = '\0';
+                    
+                    close(client);
+                    
+                    set_LSet(buffer);
+                    
+                    for(string nodeID : failed_nodes)
+                        LSet.right.erase(nodeID);
+                }
+            }
+            
+            for(int i=0; i<RT_ROW; i++){
+                for(int j=0; j<4; j++){
+                    if(RTable[i][j].nodeID == "_")  continue;
+                    
+                    int client;
+                    if((client = connectTo(RTable[i][j].ip, RTable[i][j].port)) != -1){
+                        string message = "check";
+                        send(client, message.c_str(), strlen(message.c_str()), 0);
+                        
+                        close(client);
+                        continue;
+                    }
+                    string departed_nodeID = RTable[i][j].nodeID;
+                    
+                    RTable_mtx.lock();
+                    RTable[i][j] = entry("_", "_", "_");
+                    RTable_mtx.unlock();
+                    
+                    for(int row = i, col = 0; row < RT_ROW; 
+                        row += col > (col+1 + ((col+1)%4 == j))%4, col = (col+1 + ((col+1)%4 == j))%4){
+                        
+                        if(RTable[row][col].nodeID == "_") continue;
+                        
+                        client = connectTo(RTable[row][col].ip, RTable[row][col].port);
+                        if(client == -1) continue;
+                        
+                        string message = "give_RT " + to_string(i) + " " + to_string(j);
+                        send(client, message.c_str(), strlen(message.c_str()), 0);
+                        
+                        char buffer[BUFFER_SIZE];
+                        int length = recv(client, buffer, BUFFER_SIZE, 0);
+                        buffer[length] = '\0';
+                        
+                        close(client);
+                        
+                        char* token = strtok(buffer, " ");  // token = "RT_entry" or "Empty"
+                        if(strcmp(token, "Empty") == 0) continue;
+                        
+                        token = strtok(NULL, " ");
+                        string token_nodeID, token_ip, token_port;
+                        while(token != NULL){
+                            token_nodeID = token;
+                            token = strtok(NULL, " ");
+                            token_ip = token;
+                            token = strtok(NULL, " ");
+                            token_port = token;
+                            token = strtok(NULL, " ");
+                        }
+                        
+                        if(token_nodeID == departed_nodeID) continue;
+                        
+                        RTable_mtx.lock();
+                        RTable[i][j] = entry(token_nodeID, token_ip, token_port);
+                        RTable_mtx.unlock();
+                    }
+                }
+            }
+            
+            // sleep for 5 seconds before next round of checking.
+            sleep(5);
+        }
     }
     
     
@@ -396,32 +582,40 @@ public:
     
     
     void insert_LSet(string nodeID, string ip, string port){
+        LSet_mtx.lock();
+        
         if(nodeID < info.nodeID){
-            if(compare_distance(nodeID, (*LSet.left.begin()).nodeID, info.nodeID) == 1 && LSet.left.size() == SET_SIZE/2){
-                LSet.left.erase(LSet.left.begin());
-                LSet.left.insert(entry(nodeID, ip, port));
+            if(LSet.left.size() == SET_SIZE/2){ 
+                if(compare_distance(nodeID, (*LSet.left.begin()).nodeID, info.nodeID) == 1){
+                    LSet.left.erase(LSet.left.begin());
+                    LSet.left.insert(entry(nodeID, ip, port));
+                }
             }
             else if(LSet.left.size() < SET_SIZE/2)
                 LSet.left.insert(entry(nodeID, ip, port));
         }
-        else{
-            if(compare_distance(nodeID, (*LSet.right.end()).nodeID, info.nodeID) == 1 && LSet.right.size() == SET_SIZE/2){
-                LSet.right.erase(LSet.right.end());
-                LSet.right.insert(entry(nodeID, ip, port));
+        else if(nodeID > info.nodeID){
+            if(LSet.right.size() == SET_SIZE/2){
+                if(compare_distance(nodeID, (*--LSet.right.end()).nodeID, info.nodeID) == 1){
+                    LSet.right.erase(--LSet.right.end());
+                    LSet.right.insert(entry(nodeID, ip, port));
+                }
             }
             else if(LSet.right.size() < SET_SIZE/2)
                 LSet.right.insert(entry(nodeID, ip, port));
         }
+        
+        LSet_mtx.unlock();
     }
 
 
 
-    // RT <row_index> <row_index^th row for RT>" + " done"(if node with closest nodeID)
+    // RT <row_index> <row_index^th row for RT>
     void set_RTable(char* buffer){
+        cout << buffer << endl;
         char* token = strtok(buffer, " ");  // token = "RT"
-
-        token = strtok(NULL, " ");          // token = row index
-        int row_index = atoi(token);
+        
+        int row_index = atoi(strtok(NULL, " "));
         
         token = strtok(NULL, " ");
         int i = 0;
@@ -433,8 +627,13 @@ public:
             token = strtok(NULL, " ");
             token_port = token;
             token = strtok(NULL, " ");
-            if(i != info.nodeID[row_index])     // 'i' shouldn't be equal to row_index^th digit
+            // 'i' shouldn't be equal to row_index^th digit
+            if(i != info.nodeID[row_index] - '0' && token_nodeID.substr(0, row_index) == info.nodeID.substr(0, row_index)){
+                // cout << i << " != info.nodeID[" << row_index << "] = " << info.nodeID << '[' << row_index << "] = " << info.nodeID[row_index] << endl;
+                RTable_mtx.lock();
                 RTable[row_index][i] = entry(token_nodeID, token_ip, token_port);
+                RTable_mtx.unlock();
+            }
             i++;
         }
     }
@@ -490,17 +689,6 @@ public:
     
     
     
-    void printNSet(){
-        int i = 1;
-        for(auto it = NSet.begin(); it != NSet.end(); it++){
-            cout << "    " << i << ": " << (*it).nodeID << " " << (*it).ip << " " << (*it).port << "\n";
-            i++;
-        }
-        cout << endl;
-    }
-    
-    
-    
     string getRow(int row_index){
         string row = "";
         
@@ -515,6 +703,17 @@ public:
         row.pop_back();
         
         return row;
+    }
+    
+    
+    
+    string get_LSet(){
+        string message = "LSet " + info.nodeID + " " + info.ip + " " + info.port;
+        for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
+            message.append(" " + (*it).nodeID + " " + (*it).ip + " " + (*it).port);
+        for(auto it = LSet.right.begin(); it != LSet.right.end(); it++)
+            message.append(" " + (*it).nodeID + " " + (*it).ip + " " + (*it).port);
+        return message;
     }
     
     
@@ -594,7 +793,8 @@ string getPublicIP(){
     for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next){
         if (!ifa->ifa_addr)
             continue;
-        if (ifa->ifa_addr->sa_family == AF_INET){
+        if (ifa->ifa_addr->sa_family == AF_INET){ 
+            // IPv4
             tmpAddrPtr=&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
             char addressBuffer[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);

@@ -14,6 +14,7 @@ int main(){
     cout << "\n    NodeID: " << node_id << " | IP: " << node_ip  << " | Port: " << node_port << "\n" << endl;
     
     thread run_server(&PastryNode::node_server, &node);
+    thread check_neighborhood(&PastryNode::check_peers, &node);
     
     while(true){
         cin >> command;
@@ -30,8 +31,6 @@ int main(){
             node.printRT();
         else if(command == "printLS")
             node.printLSet();
-        else if(command == "printNS")
-            node.printNSet();
         else if(command == "store" || command == "get"){
             string file_name, content;
             getline(cin, file_name);
