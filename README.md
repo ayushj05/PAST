@@ -14,15 +14,18 @@ Pastry: http://rowstron.azurewebsites.net/PAST/pastry.pdf
 * view <file_name>: displays the content of that file
 * exit: exit from the Pastry network
 
-## OS requirement:
+## OS requirement
 Linux
 
-## For compilation:
+## Compiler requirement
+g++ v6.1 or newer
+
+## For compilation
 ```bash
-g++ PAST.cpp -lpthread -o PAST
+g++ PAST.cpp -std=c++17 -lpthread -o PAST
 ```
 
-## To run the application:
+## To run the application
 ```bash
 ./PAST
 ```
