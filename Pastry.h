@@ -18,19 +18,19 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
-#include <mutex>
+#include <shared_mutex>
 #include "SHA1.h"
 using namespace std;
 
 #define BUFFER_SIZE 1025
 #define SET_SIZE 8
 #define RT_ROW 10
-#define DEFAULT_STORAGE_LIMIT 1000
+#define MAX_CLIENTS 10
 #define space(i,n) for(int i=0; i<n; i++) cout << " ";
 #define left first
 #define right second
 
-mutex LSet_mtx, RTable_mtx;
+shared_mutex LSet_mtx, RTable_mtx, storage_mtx;
 
 struct entry{
     string nodeID;
@@ -46,15 +46,6 @@ struct entry{
 
 
 
-struct storage{
-    int space_left;
-    map<string, string> data;
-    
-    storage(const int &space_left_ = DEFAULT_STORAGE_LIMIT) : space_left(space_left_) {}
-};
-
-
-
 string hash4(string, string);
 int prefix_length(string, string);
 int compare_distance(string, string, string);
@@ -64,7 +55,7 @@ string getPublicIP();
 
 class PastryNode{
     entry info;
-    storage container;
+    map<string, string> storage;
     pair<set<entry>, set<entry>> LSet;
     entry RTable[RT_ROW][4];
     // N = 100, b = 2
@@ -99,10 +90,8 @@ public:
         while(connect(client_fd, (struct sockaddr *)&server, sizeof(server)) < 0){
             auto finished = chrono::high_resolution_clock::now();
             elapsed = finished - started;
-            if(elapsed.count() > 1){
-                // close(client_fd);
+            if(elapsed.count() > 1)
                 return -1;
-            }
         }
 
         return client_fd;
@@ -114,7 +103,7 @@ public:
         int server_fd;
         struct sockaddr_in address;
         socklen_t addr_len = sizeof(address);
-        char buffer[BUFFER_SIZE];
+        thread serving_clients[MAX_CLIENTS];
 
         char serverIP_array[info.ip.size()+1];
         strcpy(serverIP_array, info.ip.c_str());
@@ -146,6 +135,7 @@ public:
             exit(EXIT_FAILURE);
         }
         
+        int i = 0;
         while(true){
             int new_socket;
             if((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addr_len)) < 0){
@@ -153,16 +143,13 @@ public:
                 exit(EXIT_FAILURE);
             }
                         
-            int length;
-            if((length = recv(new_socket, buffer, BUFFER_SIZE, 0)) < 0){
-                perror("recv() failed (node_server)");
-                exit(EXIT_FAILURE);
+            serving_clients[i] = thread(&PastryNode::handleRequest, this, server_fd, new_socket);
+            i++;
+            if(i == MAX_CLIENTS){
+                for(auto& th : serving_clients)
+                    th.join();
+                i = 0;
             }
-            buffer[length] = '\0';
-            
-            handleRequest(server_fd, new_socket, buffer);
-            
-            close(new_socket);
         }
         close(server_fd);
     }
@@ -172,23 +159,33 @@ public:
     /*
     Handles request received by the server.
     */
-    void handleRequest(int server_fd, int client_fd, char* buffer){
+    void handleRequest(int server_fd, int client_fd){
+        char buffer[BUFFER_SIZE];
+        
+        int length;
+        if((length = recv(client_fd, buffer, BUFFER_SIZE, 0)) < 0){
+            perror("recv() failed (node_server)");
+            exit(EXIT_FAILURE);
+        }
+        buffer[length] = '\0';
+        
         char buffer_tmp[strlen(buffer)];
         strcpy(buffer_tmp, buffer);
-        char* request_type = strtok(buffer_tmp, " ");
+        char* saveptr;
+        char* request_type = strtok_r(buffer_tmp, " ", &saveptr);
         
         // NEW <row_index> <nodeID> <ip> <port>
         if(strcmp(request_type, "NEW") == 0){
             close(client_fd);
             
-            int row_index = atoi(strtok(NULL, " "));
+            int row_index = atoi(strtok_r(NULL, " ", &saveptr));
             
             // send row (RT) to the new node (send own info in place of corresponding blank entry)
             string response = "RT " + to_string(row_index) + " " + getRow(row_index);
             
-            string nodeID = strtok(NULL, " ");
-            string ip = strtok(NULL, " ");
-            string port = strtok(NULL, " ");
+            string nodeID = strtok_r(NULL, " ", &saveptr);
+            string ip = strtok_r(NULL, " ", &saveptr);
+            string port = strtok_r(NULL, " ", &saveptr);
             int l = prefix_length(nodeID, info.nodeID);
             
             route(response.c_str(), nodeID, ip, port);
@@ -206,11 +203,10 @@ public:
             }
             
             // update your own RTable by filling the appropriate empty entry with new node
-            if(RTable[l][nodeID[l] - '0'].ip == "_"){
-                RTable_mtx.lock();
+            RTable_mtx.lock();
+            if(RTable[l][nodeID[l] - '0'].ip == "_")
                 RTable[l][nodeID[l] - '0'] = entry(nodeID, ip, port);
-                RTable_mtx.unlock();
-            }
+            RTable_mtx.unlock();
             
             // update your own Leaf Set
             insert_LSet(nodeID, ip, port);
@@ -230,47 +226,52 @@ public:
         else if(strcmp(request_type, "store") == 0){
             close(client_fd);
             
-            string fileID = strtok(NULL, " ");
+            string fileID = strtok_r(NULL, " ", &saveptr);
             
             if(fileID == "direct"){
-                fileID = strtok(NULL, " ");
-                string content = strtok(NULL, "");
-                container.data[fileID] = content;
+                fileID = strtok_r(NULL, " ", &saveptr);
+                string content = strtok_r(NULL, "", &saveptr);
+                store_key_value(fileID, content);
                 return;
             }
             else if(route(buffer, fileID))
                 return;
             // if not routed, then you are the closest node to fileID
             
-            string ip = strtok(NULL, " ");
-            string port = strtok(NULL, " ");
+            string ip = strtok_r(NULL, " ", &saveptr);
+            string port = strtok_r(NULL, " ", &saveptr);
             string response = "get direct " + fileID;
             
             int client = connectTo(ip, port);
             if(client == -1)    return;
             send(client, response.c_str(), strlen(response.c_str()), 0);
             
-            // receive file data and save in container
+            // receive file data and save in storage
             int length = recv(client, buffer, BUFFER_SIZE, 0);
             buffer[length] = '\0';
-            container.data[fileID] = buffer;
+            store_key_value(fileID, buffer);
             
             close(client);
             
             // ask the nodes in your Leaf Set also to store the file
             string message = "store direct " + fileID + " " + buffer;
+            shared_lock<shared_mutex> lock(LSet_mtx);
             for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
+                route(message.c_str(), fileID, (*it).ip, (*it).port);
+            for(auto it = LSet.right.begin(); it != LSet.right.end(); it++)
                 route(message.c_str(), fileID, (*it).ip, (*it).port);
         }
         // get (direct) <fileID> <client's ip> <client's port>
         else if(strcmp(request_type, "get") == 0){
-            string fileID = strtok(NULL, " ");
+            string fileID = strtok_r(NULL, " ", &saveptr);
             
             if(strcmp(fileID.c_str(), "direct") == 0){
-                fileID = strtok(NULL, " ");
-                send(client_fd, container.data[fileID].c_str(), strlen(container.data[fileID].c_str()), 0);
-                container.data.erase(fileID);
-                container.space_left++;
+                lock_guard<shared_mutex> lock(storage_mtx);
+                
+                fileID = strtok_r(NULL, " ", &saveptr);
+                send(client_fd, storage[fileID].c_str(), strlen(storage[fileID].c_str()), 0);
+                storage.erase(fileID);
+                
                 close(client_fd);
                 return;
             }
@@ -280,9 +281,12 @@ public:
                 return;
             // if not routed, then you are the closest node to fileID
             
-            string ip = strtok(NULL, " ");
-            string port = strtok(NULL, " ");
-            string response = "save " + fileID + " " + container.data[fileID];
+            string ip = strtok_r(NULL, " ", &saveptr);
+            string port = strtok_r(NULL, " ", &saveptr);
+            
+            storage_mtx.lock_shared();
+            string response = "save " + fileID + " " + storage[fileID];
+            storage_mtx.unlock_shared();
             
             int client = connectTo(ip, port);
             if(client == -1)    return;
@@ -294,13 +298,13 @@ public:
         else if(strcmp(request_type, "save") == 0){
             close(client_fd);
             
-            string fileID = strtok(NULL, " ");
-            char* data = strtok(NULL, "");
+            string fileID = strtok_r(NULL, " ", &saveptr);
+            char* data = strtok_r(NULL, "", &saveptr);
             
             if(data == NULL)
                 cout << "    <error: file not found on server>\n" << endl;
             else
-                container.data[fileID] = data;
+                store_key_value(fileID, data);
         }
         else if(strcmp(request_type, "check") == 0)
             close(client_fd);
@@ -312,9 +316,11 @@ public:
             close(client_fd);
         }
         else if(strcmp(request_type, "give_RT") == 0){
-            int i = atoi(strtok(NULL, " ")), j = atoi(strtok(NULL, " "));
+            int i = atoi(strtok_r(NULL, " ", &saveptr)), j = atoi(strtok_r(NULL, " ", &saveptr));
             
             string response;
+            
+            shared_lock<shared_mutex> lock(RTable_mtx);
             if(RTable[i][j].nodeID == "_")
                 response = "Empty";
             else
@@ -334,6 +340,8 @@ public:
     */
     bool route(const char* buffer, string nodeID, string ip = "_", string port = "_"){
         if(ip == "_"){
+            shared_lock<shared_mutex> lock1(LSet_mtx), lock2(RTable_mtx);
+            
             auto it = nodeID < info.nodeID ? LSet.left.find(nodeID) : LSet.right.find(nodeID);
             
             // setting values for ip and port of node to which we have to route
@@ -348,32 +356,30 @@ public:
                     port = RTable[pre_len][nodeID[pre_len] - '0'].port;
                 }
                 else{
-                    bool found = false;
-                    
-                    for(entry x : LSet.left){
-                        if(compare_distance(x.nodeID, info.nodeID, nodeID) == 1){
-                            ip = x.ip;
-                            port = x.port;
-                            found = true;
-                            break;
+                    if(nodeID < info.nodeID && !LSet.left.empty()){
+                        entry rmost = *--LSet.left.end();
+                        if(prefix_length(rmost.nodeID, nodeID) >= prefix_length(info.nodeID, nodeID)
+                           && compare_distance(rmost.nodeID, info.nodeID, nodeID) == 1){
+                            ip = rmost.ip;
+                            port = rmost.port;
                         }
                     }
-                    
-                    if(!found){
-                        for(entry x : LSet.right){
-                            if(compare_distance(x.nodeID, info.nodeID, nodeID) == 1){
-                                ip = x.ip;
-                                port = x.port;
-                                found = true;
-                                break;
-                            }
+                    else if(nodeID > info.nodeID && !LSet.right.empty()){
+                        entry lmost = *LSet.right.begin();
+                        if(prefix_length(lmost.nodeID, nodeID) >= prefix_length(info.nodeID, nodeID)
+                           && compare_distance(lmost.nodeID, info.nodeID, nodeID) == 1){
+                            ip = lmost.ip;
+                            port = lmost.port;
                         }
                     }
-                    
-                    if(!found){
+                    else{
+                        bool found = false;
+                        
                         for(auto &x : RTable){
                             for(auto y : x){
-                                if(compare_distance(y.nodeID, info.nodeID, nodeID) == 1){
+                                if(y.nodeID == "_") continue;
+                                if(prefix_length(y.nodeID, nodeID) >= prefix_length(info.nodeID, nodeID) 
+                                   && compare_distance(y.nodeID, info.nodeID, nodeID) == 1){
                                     ip = y.ip;
                                     port = y.port;
                                     found = true;
@@ -409,6 +415,8 @@ public:
     */
     void check_peers(){
         while(true){
+            LSet_mtx.lock();
+            
             vector<string> failed_nodes;
             
             // Remove the failed nodes from left Leaf Set and store them in failed_nodes.
@@ -430,7 +438,7 @@ public:
             // Request Leaf Set from leftmost node in own's Leaf Set to update own's Leaf Set.
             // Remove the nodes which were found to have failed in previous step, as they might
             // not have been checked by the leftmost node.
-            if(!LSet.left.empty()){
+            if(!failed_nodes.empty() && !LSet.left.empty()){
                 entry leftmost = *(LSet.left.begin());
                 int client = connectTo(leftmost.ip, leftmost.port);
                 if(client != -1){
@@ -443,7 +451,9 @@ public:
                     
                     close(client);
                     
+                    LSet_mtx.unlock();
                     set_LSet(buffer);
+                    LSet_mtx.lock();
                     
                     for(string nodeID : failed_nodes)
                         LSet.left.erase(nodeID);
@@ -471,7 +481,7 @@ public:
             // Request Leaf Set from rightmost node in own's Leaf Set to update own's Leaf Set.
             // Remove the nodes which were found to have failed in previous step, as they might
             // not have been checked by the rightmost node.
-            if(!LSet.right.empty()){
+            if(!failed_nodes.empty() && !LSet.right.empty()){
                 entry rightmost = *--LSet.right.end();
                 int client = connectTo(rightmost.ip, rightmost.port);
                 if(client != -1){
@@ -484,13 +494,17 @@ public:
                     
                     close(client);
                     
+                    LSet_mtx.unlock();
                     set_LSet(buffer);
+                    LSet_mtx.lock();
                     
                     for(string nodeID : failed_nodes)
                         LSet.right.erase(nodeID);
                 }
             }
+            LSet_mtx.unlock();
             
+            RTable_mtx.lock();
             for(int i=0; i<RT_ROW; i++){
                 for(int j=0; j<4; j++){
                     if(RTable[i][j].nodeID == "_")  continue;
@@ -505,9 +519,7 @@ public:
                     }
                     string departed_nodeID = RTable[i][j].nodeID;
                     
-                    RTable_mtx.lock();
                     RTable[i][j] = entry("_", "_", "_");
-                    RTable_mtx.unlock();
                     
                     for(int row = i, col = 0; row < RT_ROW; 
                         row += col > (col+1 + ((col+1)%4 == j))%4, col = (col+1 + ((col+1)%4 == j))%4){
@@ -526,28 +538,28 @@ public:
                         
                         close(client);
                         
-                        char* token = strtok(buffer, " ");  // token = "RT_entry" or "Empty"
+                        char* saveptr;
+                        char* token = strtok_r(buffer, " ", &saveptr);  // token = "RT_entry" or "Empty"
                         if(strcmp(token, "Empty") == 0) continue;
                         
-                        token = strtok(NULL, " ");
+                        token = strtok_r(NULL, " ", &saveptr);
                         string token_nodeID, token_ip, token_port;
                         while(token != NULL){
                             token_nodeID = token;
-                            token = strtok(NULL, " ");
+                            token = strtok_r(NULL, " ", &saveptr);
                             token_ip = token;
-                            token = strtok(NULL, " ");
+                            token = strtok_r(NULL, " ", &saveptr);
                             token_port = token;
-                            token = strtok(NULL, " ");
+                            token = strtok_r(NULL, " ", &saveptr);
                         }
                         
                         if(token_nodeID == departed_nodeID) continue;
                         
-                        RTable_mtx.lock();
                         RTable[i][j] = entry(token_nodeID, token_ip, token_port);
-                        RTable_mtx.unlock();
                     }
                 }
             }
+            RTable_mtx.unlock();
             
             // sleep for 5 seconds before next round of checking.
             sleep(5);
@@ -558,17 +570,18 @@ public:
     
     // LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>
     void set_LSet(char* buffer){
-        char* token = strtok(buffer, " ");  // token = "LSet"
-        token = strtok(NULL, " ");
+        char* saveptr;
+        char* token = strtok_r(buffer, " ", &saveptr);  // token = "LSet"
+        token = strtok_r(NULL, " ", &saveptr);
         
         string token_nodeID, token_ip, token_port;
         while(token != NULL){
             token_nodeID = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             token_ip = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             token_port = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             
             insert_LSet(token_nodeID, token_ip, token_port);
         }
@@ -577,7 +590,7 @@ public:
     
     
     void insert_LSet(string nodeID, string ip, string port){
-        LSet_mtx.lock();
+        lock_guard<shared_mutex> lock(LSet_mtx);
         
         if(nodeID < info.nodeID){
             if(LSet.left.size() == SET_SIZE/2){ 
@@ -599,34 +612,32 @@ public:
             else if(LSet.right.size() < SET_SIZE/2)
                 LSet.right.insert(entry(nodeID, ip, port));
         }
-        
-        LSet_mtx.unlock();
     }
 
 
 
     // RT <row_index> <row_index^th row for RT>
     void set_RTable(char* buffer){
-        char* token = strtok(buffer, " ");  // token = "RT"
+        lock_guard<shared_mutex> lock(RTable_mtx);
         
-        int row_index = atoi(strtok(NULL, " "));
+        char* saveptr;
+        char* token = strtok_r(buffer, " ", &saveptr);  // token = "RT"
+        // token = strtok(NULL, " ");
+        int row_index = atoi(strtok_r(NULL, " ", &saveptr));
         
-        token = strtok(NULL, " ");
+        token = strtok_r(NULL, " ", &saveptr);
         int i = 0;
         string token_nodeID, token_ip, token_port;
         while(token != NULL){
             token_nodeID = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             token_ip = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             token_port = token;
-            token = strtok(NULL, " ");
+            token = strtok_r(NULL, " ", &saveptr);
             // 'i' shouldn't be equal to row_index^th digit
-            if(i != info.nodeID[row_index] - '0' && token_nodeID.substr(0, row_index) == info.nodeID.substr(0, row_index)){
-                RTable_mtx.lock();
+            if(i != info.nodeID[row_index] - '0' && token_nodeID.substr(0, row_index) == info.nodeID.substr(0, row_index))
                 RTable[row_index][i] = entry(token_nodeID, token_ip, token_port);
-                RTable_mtx.unlock();
-            }
             i++;
         }
     }
@@ -634,6 +645,8 @@ public:
     
     
     void printRT(){
+        shared_lock<shared_mutex> lock(RTable_mtx);
+        
         int s[4] = {0};
         for(int i=0; i<4; i++)
             for(int j=0; j<RT_ROW; j++)
@@ -671,6 +684,8 @@ public:
     
     
     void printLSet(){
+        shared_lock<shared_mutex> lock(LSet_mtx);
+        
         int i = 1;
         for(auto it = LSet.left.begin(); it != LSet.left.end(); it++, i++)
             cout << "    " << i << ": " << (*it).nodeID << " " << (*it).ip << " " << (*it).port << "\n";
@@ -683,6 +698,8 @@ public:
     
     
     string getRow(int row_index){
+        shared_lock<shared_mutex> lock(RTable_mtx);
+        
         string row = "";
         
         for(int i=0; i<4; i++){
@@ -701,6 +718,8 @@ public:
     
     
     string get_LSet(){
+        shared_lock<shared_mutex> lock(LSet_mtx);
+        
         string message = "LSet " + info.nodeID + " " + info.ip + " " + info.port;
         for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
             message.append(" " + (*it).nodeID + " " + (*it).ip + " " + (*it).port);
@@ -718,16 +737,13 @@ public:
     
     
     void store_key_value(string key, string value){
-        if(container.space_left > 0){
-            container.data[key] = value;
-            container.space_left--;
-        }
-        else
-            cout << "    <error: out of space>\n" << endl;
+        lock_guard<shared_mutex> lock(storage_mtx);
+        storage[key] = value;
     }
     
     string get_value(string key){
-        return container.data[key];
+        shared_lock<shared_mutex> lock(storage_mtx);
+        return storage[key];
     }
 };
 
