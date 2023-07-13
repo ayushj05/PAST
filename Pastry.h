@@ -155,10 +155,8 @@ public:
     }
 
 
-    
-    /*
-    Handles request received by the server.
-    */
+
+    // Handles request received by the server.
     void handleRequest(int server_fd, int client_fd){
         char buffer[BUFFER_SIZE];
         
@@ -174,7 +172,7 @@ public:
         char* saveptr;
         char* request_type = strtok_r(buffer_tmp, " ", &saveptr);
         
-        // NEW <row_index> <nodeID> <ip> <port>
+        // buffer = "NEW <row_index> <nodeID> <ip> <port>"
         if(strcmp(request_type, "NEW") == 0){
             close(client_fd);
             
@@ -211,18 +209,17 @@ public:
             // update your own Leaf Set
             insert_LSet(nodeID, ip, port);
         }
-        // RT <row_index> <row_index^th row for RT>
+        // buffer = "RT <row_index> <row_index^th row for RT>"
         else if(strcmp(request_type, "RT") == 0){
             close(client_fd);
             set_RTable(buffer);
         }
-        // LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>
+        // buffer = "LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>"
         else if(strcmp(request_type, "LSet") == 0){
             close(client_fd);
             set_LSet(buffer);
         }
-        // store <fileID> <owner's ip> <owner's port>
-        // store direct <fileID> <content>
+        // buffer = "store <fileID> <owner's ip> <owner's port>" or "store direct <fileID> <content>"
         else if(strcmp(request_type, "store") == 0){
             close(client_fd);
             
@@ -261,7 +258,7 @@ public:
             for(auto it = LSet.right.begin(); it != LSet.right.end(); it++)
                 route(message.c_str(), fileID, (*it).ip, (*it).port);
         }
-        // get (direct) <fileID> <client's ip> <client's port>
+        // buffer = "get (direct) <fileID> <client's ip> <client's port>"
         else if(strcmp(request_type, "get") == 0){
             string fileID = strtok_r(NULL, " ", &saveptr);
             
@@ -294,7 +291,7 @@ public:
             
             close(client);
         }
-        // save <fileID> <data>
+        // buffer = "save <fileID> <data>"
         else if(strcmp(request_type, "save") == 0){
             close(client_fd);
             
@@ -306,8 +303,10 @@ public:
             else
                 store_key_value(fileID, data);
         }
+        // buffer = "check"
         else if(strcmp(request_type, "check") == 0)
             close(client_fd);
+        // buffer = "give_LSet"
         else if(strcmp(request_type, "give_LSet") == 0){
             string response = get_LSet();
             
@@ -315,8 +314,10 @@ public:
             
             close(client_fd);
         }
+        // buffer = "give_RT <row> <column>"
         else if(strcmp(request_type, "give_RT") == 0){
-            int i = atoi(strtok_r(NULL, " ", &saveptr)), j = atoi(strtok_r(NULL, " ", &saveptr));
+            int i = atoi(strtok_r(NULL, " ", &saveptr));
+            int j = atoi(strtok_r(NULL, " ", &saveptr));
             
             string response;
             
@@ -434,10 +435,12 @@ public:
                 close(client);
                 it++;
             }
-            
-            // Request Leaf Set from leftmost node in own's Leaf Set to update own's Leaf Set.
-            // Remove the nodes which were found to have failed in previous step, as they might
-            // not have been checked by the leftmost node.
+
+            /*
+            Request Leaf Set from leftmost node in own's Leaf Set to update own's Leaf Set.
+            Remove the nodes which were found to have failed in previous step, as they might
+            not have been checked by the leftmost node.
+            */
             if(!failed_nodes.empty() && !LSet.left.empty()){
                 entry leftmost = *(LSet.left.begin());
                 int client = connectTo(leftmost.ip, leftmost.port);
@@ -477,10 +480,12 @@ public:
                 close(client);
                 it++;
             }
-            
-            // Request Leaf Set from rightmost node in own's Leaf Set to update own's Leaf Set.
-            // Remove the nodes which were found to have failed in previous step, as they might
-            // not have been checked by the rightmost node.
+
+            /*
+            Request Leaf Set from rightmost node in own's Leaf Set to update own's Leaf Set.
+            Remove the nodes which were found to have failed in previous step, as they might
+            not have been checked by the rightmost node.
+            */
             if(!failed_nodes.empty() && !LSet.right.empty()){
                 entry rightmost = *--LSet.right.end();
                 int client = connectTo(rightmost.ip, rightmost.port);
@@ -568,7 +573,7 @@ public:
     
     
     
-    // LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>
+    // buffer = "LSet <sender's nodeID> <sender's ip> <sender's port> <sender's leaf set>"
     void set_LSet(char* buffer){
         char* saveptr;
         char* token = strtok_r(buffer, " ", &saveptr);  // token = "LSet"
@@ -616,7 +621,7 @@ public:
 
 
 
-    // RT <row_index> <row_index^th row for RT>
+    // buffer = "RT <row_index> <row_index^th row for RT>"
     void set_RTable(char* buffer){
         lock_guard<shared_mutex> lock(RTable_mtx);
         
@@ -701,7 +706,6 @@ public:
         shared_lock<shared_mutex> lock(RTable_mtx);
         
         string row = "";
-        
         for(int i=0; i<4; i++){
             if(i == info.nodeID[row_index] - '0')
                 row.append(info.nodeID + " " + info.ip + " " + info.port + " ");
@@ -749,6 +753,8 @@ public:
 
 
 
+
+// Returns the most significant 'RT_ROW' digits (in base-4) of SHA-1 hash of string A+B
 string hash4(string A, string B = ""){
     SHA1 checksum;
     checksum.update(A.append(B));
@@ -764,7 +770,7 @@ string hash4(string A, string B = ""){
 
 
 
-// Returns the length of the prefix shared among A and B, in digits
+// Returns the length of the prefix shared among A and B
 int prefix_length(string A, string B){
     int length = 0;
     while(A[length] == B[length] && length != min(A.length(), B.length()))
@@ -774,8 +780,10 @@ int prefix_length(string A, string B){
 
 
 
-// comapres distance of A & B from C.
-// returns 1 if A is closer, -1 if B is closer, 0 otherwise
+/*
+Compares distance of A & B from C.
+Returns 1 if A is closer, -1 if B is closer, 0 otherwise.
+*/
 int compare_distance(string A, string B, string C){
     for(int i=0; i<A.length(); i++){
         if(abs(A[i] - C[i]) < abs(B[i] - C[i]))
@@ -788,9 +796,8 @@ int compare_distance(string A, string B, string C){
 
 
 
-/*
-Returns IP address of wireless interface
-*/
+
+// Returns IP address of wireless interface
 string getPublicIP(){
     struct ifaddrs* ifAddrStruct = NULL;
     struct ifaddrs* ifa = NULL;
