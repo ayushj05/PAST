@@ -300,8 +300,9 @@ public:
                 lock_guard<shared_mutex> lock(storage_mtx);
                 
                 fileID = strtok_r(NULL, " ", &saveptr);
-                send(client_fd, storage[fileID].c_str(), strlen(storage[fileID].c_str()), 0);
+                string data = storage[fileID];
                 storage.erase(fileID);
+                send(client_fd, data.c_str(), strlen(data.c_str()), 0);
                 
                 close(client_fd);
                 return;
@@ -333,9 +334,34 @@ public:
             char* data = strtok_r(NULL, "", &saveptr);
             
             if(data == NULL)
-                cout << "    <error: file not found on server>\n" << endl;
+                cout << "<error: file not found on server>\n" << endl;
             else
                 store_key_value(fileID, data);
+        }
+        // buffer = "delete (direct) <fileID>"
+        else if(strcmp(request_type, "delete") == 0){
+            close(client_fd);
+            
+            string fileID = strtok_r(NULL, " ", &saveptr);
+            
+            if(fileID == "direct"){
+                fileID = strtok_r(NULL, " ", &saveptr);
+                delete_key_value(fileID);
+                return;
+            }
+            else if(route(buffer, fileID))
+                return;
+            // if not routed, then you are the closest node to fileID
+
+            delete_key_value(fileID);
+            
+            // ask the nodes in your Leaf Set also to delete the file
+            string message = "delete direct " + fileID;
+            shared_lock<shared_mutex> lock(LSet_mtx);
+            for(auto it = LSet.left.begin(); it != LSet.left.end(); it++)
+                route(message.c_str(), fileID, (*it).ip, (*it).port);
+            for(auto it = LSet.right.begin(); it != LSet.right.end(); it++)
+                route(message.c_str(), fileID, (*it).ip, (*it).port);
         }
         // buffer = "check"
         else if(strcmp(request_type, "check") == 0)
@@ -782,6 +808,11 @@ public:
     string get_value(string key){
         shared_lock<shared_mutex> lock(storage_mtx);
         return storage[key];
+    }
+
+    void delete_key_value(string key){
+        lock_guard<shared_mutex> lock(storage_mtx);
+        storage.erase(key);
     }
 };
 

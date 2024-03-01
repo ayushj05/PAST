@@ -17,6 +17,7 @@ int main(){
     thread check_neighborhood(&PastryNode::check_peers, &node);
     
     while(true){
+        cout << "> ";
         cin >> command;
         cout << "\n";
         
@@ -41,7 +42,7 @@ int main(){
                 getline(cin, content);
                 cout << "\n";
                 if(content.empty())
-                    cout << "    <error: file content cannot be empty>\n" << endl;
+                    cout << "<error: file content cannot be empty>\n" << endl;
                 else
                     node.store_key_value(fileID, content);
             }
@@ -54,17 +55,24 @@ int main(){
             getline(cin, file_name);
             string value = node.get_value(hash4(file_name + node_id));
             if(value.empty())
-                cout << "    <error: file not found>\n" << endl;
+                cout << "<error: file not found>\n" << endl;
             else
                 cout << value << "\n" << endl;
         }
+        else if(command == "delete"){
+            string file_name;
+            getline(cin, file_name);
+            string fileID = hash4(file_name + node_id);
+            string request = "delete " + fileID;
+            node.route(request.c_str(), fileID);
+        }
         else if(command == "exit"){
             node.status = EXIT;
-            cout << "    Exiting..." << endl;
+            cout << "Exiting..." << endl;
             break;
         }
         else
-            cout << "    <invalid command>\n" << endl;
+            cout << "<invalid command>\n" << endl;
     }
 
     run_server.join();
