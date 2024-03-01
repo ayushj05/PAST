@@ -8,9 +8,11 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <poll.h>
 #include <set>
 #include <map>
 #include <vector>
@@ -29,6 +31,9 @@ using namespace std;
 #define space(i,n) for(int i=0; i<n; i++) cout << " ";
 #define left first
 #define right second
+
+#define RUNNING true
+#define EXIT false
 
 shared_mutex LSet_mtx, RTable_mtx, storage_mtx;
 
@@ -60,6 +65,8 @@ class PastryNode{
     entry RTable[RT_ROW][4];
     // N = 100, b = 2
 public:
+    bool status = RUNNING;
+
     // Connects present node with the node having specified ip and port
     int connectTo(string ip, string port){
         int client_fd;
@@ -121,10 +128,18 @@ public:
             perror("setsockopt() failed (node_server)");
             exit(EXIT_FAILURE);
         }
+        
+        // Setting to non-blocking mode
+        int on = 1;
+        if (ioctl(server_fd, FIONBIO, (char *)&on) < 0){
+            perror("ioctl() failed (node_server)");
+            close(server_fd);
+            exit(EXIT_FAILURE);
+        }
+
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = inet_addr(serverIP_array);
         address.sin_port = htons(stoi(info.port));
-        
         if(bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
             perror("bind() failed (node_server)");
             exit(EXIT_FAILURE);
@@ -136,20 +151,39 @@ public:
         }
         
         int i = 0;
-        while(true){
+        while(status == RUNNING){
             int new_socket;
+            
+            struct pollfd pfds;
+            pfds.fd = server_fd;
+            pfds.events = POLLIN;
+            while(status == RUNNING){
+                int num_events = poll(&pfds, 1, 1000);  // 1 second timeout
+                if(num_events != 0 && (pfds.revents & POLLIN))
+                    break;
+            }
+            if(status == EXIT)
+                break;
+            
             if((new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addr_len)) < 0){
                 perror("accept() failed (node_server)");
                 exit(EXIT_FAILURE);
             }
-                        
+            
             serving_clients[i] = thread(&PastryNode::handleRequest, this, server_fd, new_socket);
             i++;
             if(i == MAX_CLIENTS){
-                for(auto& th : serving_clients)
-                    th.join();
+                for(auto& th : serving_clients){
+                    if(th.joinable())
+                        th.join();
+                }
                 i = 0;
             }
+        }
+        
+        for(int j=0; j<i; j++){
+            if(serving_clients[j].joinable())
+                serving_clients[j].join();
         }
         close(server_fd);
     }
@@ -415,7 +449,7 @@ public:
     Removes the nodes that have departed from the network.
     */
     void check_peers(){
-        while(true){
+        while(status == RUNNING){
             LSet_mtx.lock();
             
             vector<string> failed_nodes;

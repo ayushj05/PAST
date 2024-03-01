@@ -54,15 +54,21 @@ int main(){
             getline(cin, file_name);
             string value = node.get_value(hash4(file_name + node_id));
             if(value.empty())
-                cout << "    <error: file not found on device>\n" << endl;
+                cout << "    <error: file not found>\n" << endl;
             else
                 cout << value << "\n" << endl;
         }
-        else if(command == "exit")
+        else if(command == "exit"){
+            node.status = EXIT;
+            cout << "    Exiting..." << endl;
             break;
+        }
         else
             cout << "    <invalid command>\n" << endl;
     }
+
+    run_server.join();
+    check_neighborhood.join();
     
     return 0;
 }
