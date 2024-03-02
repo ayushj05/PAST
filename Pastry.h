@@ -36,6 +36,8 @@ using namespace std;
 #define EXIT false
 
 shared_mutex LSet_mtx, RTable_mtx, storage_mtx;
+mutex get_mtx;
+condition_variable cv;
 
 struct entry{
     string nodeID;
@@ -66,6 +68,7 @@ class PastryNode{
     // N = 100, b = 2
 public:
     bool status = RUNNING;
+    bool ready = false;
 
     // Connects present node with the node having specified ip and port
     int connectTo(string ip, string port){
@@ -334,9 +337,14 @@ public:
             char* data = strtok_r(NULL, "", &saveptr);
             
             if(data == NULL)
-                cout << "<error: file not found on server>\n" << endl;
+                cout << "<error: file not found on network>\n" << endl;
             else
                 store_key_value(fileID, data);
+            
+            // Signal to move to next command
+            unique_lock<mutex> lck(get_mtx);
+            ready = true;
+            cv.notify_one();
         }
         // buffer = "delete (direct) <fileID>"
         else if(strcmp(request_type, "delete") == 0){

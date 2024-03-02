@@ -20,6 +20,7 @@ int main(){
         cout << "> ";
         cin >> command;
         cout << "\n";
+        node.ready = false;
         
         if(command == "join"){
             string ip, port;
@@ -49,6 +50,12 @@ int main(){
             
             string request = command + " " + fileID + " " + node_ip + " " + node_port;
             node.route(request.c_str(), fileID);
+
+            // Wait for file retrieval before going to next command
+            if(command == "get"){
+                unique_lock<mutex> lck(get_mtx);
+                cv.wait(lck, [&]{ return node.ready; });
+            }
         }
         else if(command == "view"){
             string file_name;
