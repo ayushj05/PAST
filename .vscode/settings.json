@@ -3,6 +3,9 @@
         "thread": "cpp",
         "ostream": "cpp",
         "cstdlib": "cpp",
-        "condition_variable": "cpp"
+        "condition_variable": "cpp",
+        "set": "cpp",
+        "unordered_map": "cpp",
+        "iostream": "cpp"
     }
 }

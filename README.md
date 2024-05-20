@@ -12,20 +12,22 @@ Pastry: http://rowstron.azurewebsites.net/PAST/pastry.pdf
 * ```store <file_name>```: stores the content of that file in the network
 * ```get <file_name>```: retrieves the content of that file from the network
 * ```view <file_name>```: displays the content of that file
+* ```delete <file_name>```: deletes the file from the network
 * ```exit```: exit from the Pastry network
 
-## OS requirement
-Linux
+## OS used
+Ubuntu 18.04 LTS
 
 ## Compiler requirement
 g++ v6.1 or newer
 
-## For compilation
+## To Build
 ```bash
-g++ PAST.cpp -std=c++17 -lpthread -o PAST
+make clean
+make
 ```
 
-## To run the application
+## To run PAST
 ```bash
-./PAST
+bin/PAST
 ```

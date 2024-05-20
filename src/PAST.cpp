@@ -1,20 +1,19 @@
-#include "Pastry.h"
+#include <iostream>
 #include <thread>
+#include <shared_mutex>
+#include "Pastry.h"
+
+extern mutex get_mtx;
+extern condition_variable cv;
 
 int main(){
     PastryNode node;
-    string command, node_id, node_ip = getPublicIP(), node_port;
+    string command, node_ip = getIP(), node_port;
     
-    cout << "Enter port: ";
+    cout << "Enter port number: ";
     cin >> node_port;
     
-    node_id = hash4(node_ip, node_port);
-    node.set_info(node_id, node_ip, node_port);
-    
-    cout << "\n    NodeID: " << node_id << " | IP: " << node_ip  << " | Port: " << node_port << "\n" << endl;
-    
-    thread run_server(&PastryNode::node_server, &node);
-    thread check_neighborhood(&PastryNode::check_peers, &node);
+    node.start_node(node_ip, node_port);
     
     while(true){
         cout << "> ";
@@ -25,9 +24,9 @@ int main(){
         if(command == "join"){
             string ip, port;
             cin >> ip >> port;
-            string join_request = "NEW 0 " + node_id + " " + node_ip + " " + node_port;
+            string join_request = "NEW 0 " + node.getID() + " " + node_ip + " " + node_port;
             // Passed node_id just for namesake
-            node.route(join_request.c_str(), node_id, ip, port);
+            node.route(join_request.c_str(), node.getID(), ip, port);
         }
         else if(command == "printRT")
             node.printRT();
@@ -36,7 +35,7 @@ int main(){
         else if(command == "store" || command == "get"){
             string file_name, content;
             getline(cin, file_name);
-            string fileID = hash4(file_name + node_id);
+            string fileID = hash4(file_name + node.getID());
             
             if(command == "store"){
                 cout << "Enter file content: ";
@@ -60,7 +59,7 @@ int main(){
         else if(command == "view"){
             string file_name;
             getline(cin, file_name);
-            string value = node.get_value(hash4(file_name + node_id));
+            string value = node.get_value(hash4(file_name + node.getID()));
             if(value.empty())
                 cout << "<error: file not found>\n" << endl;
             else
@@ -69,7 +68,7 @@ int main(){
         else if(command == "delete"){
             string file_name;
             getline(cin, file_name);
-            string fileID = hash4(file_name + node_id);
+            string fileID = hash4(file_name + node.getID());
             string request = "delete " + fileID;
             node.route(request.c_str(), fileID);
         }
@@ -82,8 +81,7 @@ int main(){
             cout << "<invalid command>\n" << endl;
     }
 
-    run_server.join();
-    check_neighborhood.join();
+    node.stop_node();
     
     return 0;
 }
